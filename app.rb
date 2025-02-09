@@ -32,17 +32,32 @@ end
 post '/push/:device_token/:id' do
   request.body.rewind
 
+  content_encoding = request.env['HTTP_CONTENT_ENCODING']
+
   notification = Apnotic::Notification.new(params[:device_token])
 
   notification.topic = ENV['TOPIC']
   notification.alert = { 'loc-key' => 'apns-default-message' }
   notification.mutable_content = true
   notification.custom_payload = {
+    e: content_encoding,
     i: params[:id],
     m: Base64.urlsafe_encode64(request.body.read),
-    s: request.env['HTTP_ENCRYPTION'].split('salt=').last,
-    k: request.env['HTTP_CRYPTO_KEY'].split('dh=').last.split(';').first
   }
+
+  case content_encoding
+  when 'aes128gcm'
+    # Final version of RFC 8291 Message Encryption for Web Push.
+    # Everything's in the body, we don't need anything else.
+  when 'aesgcm'
+    # Draft version of RFC 8291 Message Encryption for Web Push.
+    # Capture extra info from headers.
+    notification.custom_payload[:s] = request.env['HTTP_ENCRYPTION'].split('salt=').last
+    notification.custom_payload[:k] = request.env['HTTP_CRYPTO_KEY'].split('dh=').last.split(';').first
+  else
+    # Not an encrypted Web Push notification, or a newer standard than we know.
+    return 415
+  end
 
   if params[:sandbox] == 'true'
     push = SANDBOX_CONNECTION.prepare_push(notification)
